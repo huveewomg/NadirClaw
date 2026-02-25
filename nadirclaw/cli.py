@@ -206,6 +206,30 @@ def report(since, model, fmt, export_path):
         click.echo(output)
 
 
+@main.command()
+@click.option("--since", default=None, help="Time filter: '24h', '7d', '2025-02-01'")
+@click.option("--baseline", default=None, help="Model to compare against (default: most expensive in logs)")
+@click.option("--format", "fmt", default="text", type=click.Choice(["text", "json"]), help="Output format")
+def savings(since, baseline, fmt):
+    """Show how much money NadirClaw saved you."""
+    from nadirclaw.savings import format_savings_text, generate_savings_report
+    from nadirclaw.settings import settings
+
+    log_path = settings.LOG_DIR / "requests.jsonl"
+    if not log_path.exists():
+        click.echo("No log file found. Start the server and make some requests first.")
+        return
+
+    report_data = generate_savings_report(log_path, since=since, baseline_model=baseline)
+
+    if fmt == "json":
+        output = json.dumps(report_data, indent=2, default=str)
+    else:
+        output = format_savings_text(report_data)
+
+    click.echo(output)
+
+
 @main.command(name="build-centroids")
 def build_centroids():
     """Regenerate centroid .npy files from prototype prompts."""

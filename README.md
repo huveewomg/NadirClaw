@@ -483,6 +483,8 @@ nadirclaw serve --log-raw    # Start with full request/response logging
 nadirclaw classify           # Classify a prompt (no server needed)
 nadirclaw report             # Show a summary report of request logs
 nadirclaw report --since 24h # Report for the last 24 hours
+nadirclaw savings            # Show how much money NadirClaw saved you
+nadirclaw savings --since 7d # Savings for the last 7 days
 nadirclaw status             # Show config, credentials, and server status
 nadirclaw auth add           # Add an API key for any provider
 nadirclaw auth status        # Show configured credentials (masked)
