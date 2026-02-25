@@ -21,9 +21,6 @@ NadirClaw sits between your AI tool and your LLM providers as an OpenAI-compatib
   <img src="docs/images/architecture.png" alt="NadirClaw Architecture" width="700" />
 </p>
 
-<p align="center">
-  <img src="docs/images/nadirclaw_img.png" alt="NadirClaw in action" width="700" />
-</p>
 
 ## Dashboard
 
