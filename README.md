@@ -120,6 +120,30 @@ rm -rf ~/.nadirclaw
 sudo rm -f /usr/local/bin/nadirclaw
 ```
 
+### Docker
+
+Run NadirClaw + Ollama with zero cost, fully local:
+
+```bash
+git clone https://github.com/doramirdor/NadirClaw.git && cd NadirClaw
+docker compose up
+```
+
+This starts Ollama and NadirClaw on port `8856`. Pull a model once it's running:
+
+```bash
+docker compose exec ollama ollama pull llama3.1:8b
+```
+
+To use premium models alongside Ollama, create a `.env` file with your API keys and model config (see `.env.example`), then restart.
+
+To run NadirClaw standalone (without Ollama):
+
+```bash
+docker build -t nadirclaw .
+docker run -p 8856:8856 --env-file .env nadirclaw
+```
+
 ## Configure
 
 ### Environment File
