@@ -36,3 +36,5 @@ logs/
 # NadirClaw credentials (prevent accidental commits)
 .nadirclaw/
 credentials.json
+# Agent work directories
+.smartkanban/

@@ -23,7 +23,7 @@ Under the hood, a sentence-embedding classifier scores prompt complexity in abou
 
 ## What we just shipped in v0.6.0
 
-**Fallback chains** - This is the one I'm most proud of. When a model fails (rate limit, server error, timeout), NadirClaw cascades through a list of fallback models automatically. Your agent never sees the failure.
+**Fallback chains** - When a model fails (rate limit, server error, timeout), NadirClaw cascades through a list of fallback models automatically. Your agent never sees the failure.
 
 ```
 NADIRCLAW_FALLBACK_CHAIN=gpt-4.1,claude-sonnet-4-5,gemini-2.5-flash
@@ -37,7 +37,7 @@ NADIRCLAW_MONTHLY_BUDGET=50.00
 nadirclaw budget  # See spend by model
 ```
 
-**Prompt caching** - LRU cache with configurable TTL. Identical prompts skip the API entirely. Huge for CI/testing where you repeat prompts.
+**Prompt caching** - LRU cache with configurable TTL. Identical prompts skip the API entirely. Big win for CI/testing where you repeat prompts constantly.
 
 **Web dashboard** - Visit localhost:8856/dashboard for real-time routing stats. Dark theme, auto-refreshes, zero dependencies.
 
@@ -90,4 +90,4 @@ docker compose up
 
 GitHub: [github.com/doramirdor/NadirClaw](https://github.com/doramirdor/NadirClaw)
 
-Stars help visibility. If this is useful, consider dropping one.
+If this saves you money, a star on GitHub helps others find it too.

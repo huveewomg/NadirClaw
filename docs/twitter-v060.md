@@ -3,7 +3,7 @@
 ## Tweet 1
 NadirClaw v0.6.0 is out.
 
-5 features that make it a real LLM router, not a toy:
+5 features that make it a real LLM router:
 
 - Fallback chains (models fail? cascade to the next one)
 - Budget alerts (know before you blow $50/day)
