@@ -77,7 +77,7 @@ That's it. NadirClaw starts on `http://localhost:8856` with sensible defaults (G
 - **Raw logging** — optional `--log-raw` flag to capture full request/response content for debugging and replay
 - **OpenTelemetry tracing** — optional distributed tracing with GenAI semantic conventions (`pip install nadirclaw[telemetry]`)
 - **Cost savings calculator** — `nadirclaw savings` shows exactly how much money you've saved, with monthly projections
-- **Spend tracking and budgets** — real-time per-request cost tracking with daily/monthly budget limits and alerts via `nadirclaw budget`
+- **Spend tracking and budgets** — real-time per-request cost tracking with daily/monthly budget limits, alerts via `nadirclaw budget`, optional webhook and stdout notifications
 - **Prompt caching** — in-memory LRU cache for identical chat completions, skipping redundant LLM calls entirely. Configurable TTL and max size via `NADIRCLAW_CACHE_TTL` and `NADIRCLAW_CACHE_MAX_SIZE`. Monitor with `nadirclaw cache` or the `/v1/cache` endpoint
 - **Live dashboard** — `nadirclaw dashboard` for terminal, or visit `http://localhost:8856/dashboard` for a web UI with real-time stats, cost tracking, and model usage
 - **GitHub Action** — [`doramirdor/nadirclaw-action`](https://github.com/doramirdor/nadirclaw-action) for CI/CD pipelines
@@ -902,6 +902,8 @@ Auth is disabled by default (local-only). Set `NADIRCLAW_AUTH_TOKEN` to require 
 | `NADIRCLAW_DAILY_BUDGET` | *(none)* | Daily spend limit in USD (e.g. `5.00`) |
 | `NADIRCLAW_MONTHLY_BUDGET` | *(none)* | Monthly spend limit in USD (e.g. `50.00`) |
 | `NADIRCLAW_BUDGET_WARN_THRESHOLD` | `0.8` | Alert when spend reaches this fraction of budget |
+| `NADIRCLAW_BUDGET_WEBHOOK_URL` | *(none)* | Webhook URL — receives POST with JSON alert payload |
+| `NADIRCLAW_BUDGET_STDOUT_ALERTS` | `false` | Print alerts to stdout (`true`/`1`/`yes` to enable) |
 | `NADIRCLAW_AUTH_TOKEN` | *(empty — auth disabled)* | Set to require a bearer token |
 | `GEMINI_API_KEY` | -- | Google Gemini API key (also accepts `GOOGLE_API_KEY`) |
 | `ANTHROPIC_API_KEY` | -- | Anthropic API key |

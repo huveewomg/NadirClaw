@@ -7,15 +7,32 @@ When a budget threshold is approached or exceeded, logs warnings.
 import json
 import logging
 import time
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock
-from typing import Any, Dict, Optional
+from threading import Lock, Thread
+from typing import Any, Callable, Dict, List, Optional
 
 from nadirclaw.routing import estimate_cost
 from nadirclaw.settings import settings
 
 logger = logging.getLogger("nadirclaw.budget")
+
+
+def _send_webhook(url: str, payload: Dict[str, Any], timeout: int = 10) -> None:
+    """POST a JSON payload to a webhook URL (fire-and-forget in a thread)."""
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            logger.debug("Webhook delivered to %s — HTTP %s", url, resp.status)
+    except Exception as e:
+        logger.warning("Webhook delivery failed (%s): %s", url, e)
 
 
 class BudgetTracker:
@@ -31,10 +48,14 @@ class BudgetTracker:
         monthly_budget: Optional[float] = None,
         warn_threshold: float = 0.8,
         state_file: Optional[Path] = None,
+        webhook_url: Optional[str] = None,
+        stdout_alerts: bool = False,
     ):
         self.daily_budget = daily_budget
         self.monthly_budget = monthly_budget
         self.warn_threshold = warn_threshold
+        self.webhook_url = webhook_url
+        self.stdout_alerts = stdout_alerts
         self._state_file = state_file or (settings.LOG_DIR / "budget_state.json")
         self._lock = Lock()
 
@@ -193,7 +214,34 @@ class BudgetTracker:
                 alerts.append(msg)
                 logger.warning("⚠️ %s", msg)
 
+        # Deliver alerts via configured channels
+        for msg in alerts:
+            self._deliver_alert(msg)
+
         return alerts
+
+    def _deliver_alert(self, message: str) -> None:
+        """Send an alert via stdout and/or webhook."""
+        if self.stdout_alerts:
+            print(f"[NadirClaw ALERT] {message}", flush=True)
+
+        if self.webhook_url:
+            payload = {
+                "source": "nadirclaw",
+                "type": "budget_alert",
+                "message": message,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "daily_spend": round(self._daily_spend, 4),
+                "daily_budget": self.daily_budget,
+                "monthly_spend": round(self._monthly_spend, 4),
+                "monthly_budget": self.monthly_budget,
+            }
+            # Fire-and-forget in background thread to avoid blocking requests
+            Thread(
+                target=_send_webhook,
+                args=(self.webhook_url, payload),
+                daemon=True,
+            ).start()
 
     def get_status(self) -> Dict[str, Any]:
         """Get current budget status."""
@@ -241,9 +289,13 @@ def get_budget_tracker() -> BudgetTracker:
                 daily = os.getenv("NADIRCLAW_DAILY_BUDGET")
                 monthly = os.getenv("NADIRCLAW_MONTHLY_BUDGET")
                 warn = float(os.getenv("NADIRCLAW_BUDGET_WARN_THRESHOLD", "0.8"))
+                webhook = os.getenv("NADIRCLAW_BUDGET_WEBHOOK_URL")
+                stdout = os.getenv("NADIRCLAW_BUDGET_STDOUT_ALERTS", "").lower() in ("1", "true", "yes")
                 _budget_tracker = BudgetTracker(
                     daily_budget=float(daily) if daily else None,
                     monthly_budget=float(monthly) if monthly else None,
                     warn_threshold=warn,
+                    webhook_url=webhook,
+                    stdout_alerts=stdout,
                 )
     return _budget_tracker
