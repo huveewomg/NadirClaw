@@ -87,6 +87,7 @@ That's it. NadirClaw starts on `http://localhost:8856` with sensible defaults (G
 - **OpenAI-compatible API** — drop-in replacement for any tool that speaks the OpenAI chat completions API
 - **Request reporting** — `nadirclaw report` analyzes your JSONL logs with filters, latency stats, tier breakdown, and token usage
 - **Raw logging** — optional `--log-raw` flag to capture full request/response content for debugging and replay
+- **Prometheus metrics** — built-in `/metrics` endpoint with request counts, latency histograms, token/cost totals, cache hits, and fallback tracking (zero extra dependencies)
 - **OpenTelemetry tracing** — optional distributed tracing with GenAI semantic conventions (`pip install nadirclaw[telemetry]`)
 - **Cost savings calculator** — `nadirclaw savings` shows exactly how much money you've saved, with monthly projections
 - **Spend tracking and budgets** — real-time per-request cost tracking with daily/monthly budget limits, alerts via `nadirclaw budget`, optional webhook and stdout notifications
@@ -900,6 +901,7 @@ Auth is disabled by default (local-only). Set `NADIRCLAW_AUTH_TOKEN` to require 
 | `/v1/classify/batch` | POST | Classify multiple prompts at once |
 | `/v1/models` | GET | List available models |
 | `/v1/logs` | GET | View recent request logs |
+| `/metrics` | GET | Prometheus metrics (request counts, latency histograms, token/cost totals, cache hits, fallbacks) |
 | `/health` | GET | Health check (no auth required) |
 
 ## Configuration Reference
@@ -948,6 +950,37 @@ Spans include [GenAI semantic conventions](https://opentelemetry.io/docs/specs/s
 
 If the telemetry packages are not installed or `OTEL_EXPORTER_OTLP_ENDPOINT` is not set, all tracing is a no-op with zero overhead.
 
+## Prometheus Metrics
+
+NadirClaw exposes a built-in `/metrics` endpoint in Prometheus text exposition format. No extra dependencies required.
+
+```bash
+curl http://localhost:8856/metrics
+```
+
+Available metrics:
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `nadirclaw_requests_total` | counter | model, tier, status | Total completed LLM requests |
+| `nadirclaw_tokens_prompt_total` | counter | model | Total prompt tokens consumed |
+| `nadirclaw_tokens_completion_total` | counter | model | Total completion tokens generated |
+| `nadirclaw_cost_dollars_total` | counter | model | Estimated cost in USD |
+| `nadirclaw_request_latency_ms` | histogram | model, tier | Request latency in milliseconds |
+| `nadirclaw_cache_hits_total` | counter | — | Prompt cache hits |
+| `nadirclaw_fallbacks_total` | counter | from_model, to_model | Fallback events |
+| `nadirclaw_errors_total` | counter | model, error_type | Request errors |
+| `nadirclaw_uptime_seconds` | gauge | — | Seconds since server start |
+
+Add to your `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: nadirclaw
+    static_configs:
+      - targets: ["localhost:8856"]
+```
+
 ## Project Structure
 
 ```
@@ -962,6 +995,7 @@ nadirclaw/
   oauth.py           # OAuth login flows (OpenAI, Anthropic, Gemini, Antigravity)
   routing.py         # Routing intelligence (agentic, reasoning, profiles, aliases, sessions)
   report.py          # Log parsing and report generation
+  metrics.py         # Built-in Prometheus metrics (zero dependencies)
   telemetry.py       # Optional OpenTelemetry integration (no-op without packages)
   auth.py            # Bearer token / API key authentication
   settings.py        # Environment-based configuration (reads ~/.nadirclaw/.env)

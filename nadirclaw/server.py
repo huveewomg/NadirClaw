@@ -187,6 +187,10 @@ def _log_request(entry: Dict[str, Any]) -> None:
     from nadirclaw.request_logger import log_request as sqlite_log
     sqlite_log(entry)
 
+    # Update Prometheus metrics
+    from nadirclaw.metrics import record_request
+    record_request(entry)
+
     tier = entry.get("tier", "?")
     model = entry.get("selected_model", "?")
     conf = entry.get("confidence", 0)
@@ -1681,6 +1685,17 @@ async def list_models(
             for m in models
         ],
     }
+
+
+@app.get("/metrics")
+async def prometheus_metrics():
+    """Prometheus metrics endpoint — scrape with /metrics."""
+    from nadirclaw.metrics import render_metrics
+    from fastapi.responses import Response
+    return Response(
+        content=render_metrics(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 @app.get("/health")
