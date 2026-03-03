@@ -8,6 +8,7 @@ import hashlib
 import logging
 import re
 import time
+from collections import OrderedDict
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -301,10 +302,11 @@ class SessionCache:
     """
 
     def __init__(self, ttl_seconds: int = 1800, max_size: int = 10_000):
-        self._cache: Dict[str, Tuple[str, str, float]] = {}  # key → (model, tier, timestamp)
+        # OrderedDict gives O(1) move-to-end (move_to_end) and O(1) popitem(last=False)
+        # for LRU eviction — replaces the old List-based access_order which was O(n).
+        self._cache: OrderedDict[str, Tuple[str, str, float]] = OrderedDict()  # key → (model, tier, timestamp)
         self._ttl = ttl_seconds
         self._max_size = max_size
-        self._access_order: List[str] = []  # LRU tracking (most recent at end)
         self._cleanup_counter = 0
         self._cleanup_interval = 100  # run cleanup every N puts
         self._lock = Lock()
@@ -331,18 +333,13 @@ class SessionCache:
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
     def _touch(self, key: str) -> None:
-        """Move key to end of access order (most recently used)."""
-        try:
-            self._access_order.remove(key)
-        except ValueError:
-            pass
-        self._access_order.append(key)
+        """Move key to most-recently-used position — O(1) with OrderedDict."""
+        self._cache.move_to_end(key)
 
     def _evict_lru(self) -> None:
-        """Evict least-recently-used entries until under max size."""
-        while len(self._cache) > self._max_size and self._access_order:
-            oldest_key = self._access_order.pop(0)
-            self._cache.pop(oldest_key, None)
+        """Evict least-recently-used entries until under max size — O(1) per eviction."""
+        while len(self._cache) > self._max_size:
+            self._cache.popitem(last=False)
 
     def get(self, messages: List[Any]) -> Optional[Tuple[str, str]]:
         """Return (model, tier) if a session exists and isn't expired."""
@@ -354,10 +351,6 @@ class SessionCache:
             model, tier, ts = entry
             if time.time() - ts > self._ttl:
                 del self._cache[key]
-                try:
-                    self._access_order.remove(key)
-                except ValueError:
-                    pass
                 return None
             self._touch(key)
             return model, tier
@@ -388,10 +381,6 @@ class SessionCache:
         expired = [k for k, (_, _, ts) in self._cache.items() if now - ts > self._ttl]
         for k in expired:
             del self._cache[k]
-            try:
-                self._access_order.remove(k)
-            except ValueError:
-                pass
         return len(expired)
 
 

@@ -58,17 +58,20 @@ def generate_savings_report(
     log_path: Path,
     since: Optional[str] = None,
     baseline_model: Optional[str] = None,
+    entries: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Generate a cost savings report.
 
     Args:
-        log_path: Path to the JSONL log file.
+        log_path: Path to the JSONL log file (used if entries is not provided).
         since: Optional time filter (e.g. "24h", "7d").
         baseline_model: Model to compare against (what you'd use without routing).
                        Defaults to the most expensive model seen in logs.
+        entries: Pre-loaded log entries (skips file loading when provided).
     """
-    since_dt = parse_since(since) if since else None
-    entries = load_log_entries(log_path, since=since_dt)
+    if entries is None:
+        since_dt = parse_since(since) if since else None
+        entries = load_log_entries(log_path, since=since_dt)
 
     if not entries:
         return {"total_requests": 0, "message": "No requests found in logs."}

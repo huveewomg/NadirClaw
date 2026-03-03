@@ -50,10 +50,6 @@ def serve(port, simple_model, complex_model, models, token, verbose, log_raw):
         else:
             click.echo("Starting with defaults. Run 'nadirclaw setup' anytime.")
 
-    from dotenv import load_dotenv
-
-    load_dotenv()
-
     # Override env vars from CLI flags
     if port:
         os.environ["NADIRCLAW_PORT"] = str(port)
@@ -92,8 +88,9 @@ def serve(port, simple_model, complex_model, models, token, verbose, log_raw):
 
 
 @main.command()
-@click.argument("prompt")
-def classify(prompt):
+@click.argument("prompt", nargs=-1, required=True)
+@click.option("--format", "fmt", default="text", type=click.Choice(["text", "json"]), help="Output format")
+def classify(prompt, fmt):
     """Classify a prompt as simple or complex (no server needed)."""
     import logging
 
@@ -102,8 +99,9 @@ def classify(prompt):
     from nadirclaw.classifier import BinaryComplexityClassifier
     from nadirclaw.settings import settings
 
+    prompt_text = " ".join(prompt)
     classifier = BinaryComplexityClassifier()
-    is_complex, confidence = classifier.classify(prompt)
+    is_complex, confidence = classifier.classify(prompt_text)
 
     tier = "complex" if is_complex else "simple"
     score = classifier._confidence_to_score(is_complex, confidence)
@@ -111,10 +109,20 @@ def classify(prompt):
     # Pick model from explicit tier config
     model = settings.COMPLEX_MODEL if is_complex else settings.SIMPLE_MODEL
 
-    click.echo(f"Tier:       {tier}")
-    click.echo(f"Confidence: {confidence:.4f}")
-    click.echo(f"Score:      {score:.4f}")
-    click.echo(f"Model:      {model}")
+    if fmt == "json":
+        click.echo(json.dumps({
+            "tier": tier,
+            "is_complex": is_complex,
+            "confidence": round(confidence, 4),
+            "score": round(score, 4),
+            "model": model,
+            "prompt": prompt_text,
+        }))
+    else:
+        click.echo(f"Tier:       {tier}")
+        click.echo(f"Confidence: {confidence:.4f}")
+        click.echo(f"Score:      {score:.4f}")
+        click.echo(f"Model:      {model}")
 
 
 @main.command()
@@ -226,7 +234,8 @@ def dashboard(refresh):
     from nadirclaw.settings import settings
 
     log_path = settings.LOG_DIR / "requests.jsonl"
-    run_dashboard(log_path, refresh=refresh)
+    db_path = settings.LOG_DIR / "requests.db"
+    run_dashboard(log_path, refresh=refresh, db_path=db_path)
 
 
 @main.command()
@@ -235,15 +244,32 @@ def dashboard(refresh):
 @click.option("--format", "fmt", default="text", type=click.Choice(["text", "json"]), help="Output format")
 def savings(since, baseline, fmt):
     """Show how much money NadirClaw saved you."""
+    from nadirclaw.report import load_log_entries_sqlite, load_log_entries, parse_since
     from nadirclaw.savings import format_savings_text, generate_savings_report
     from nadirclaw.settings import settings
 
+    db_path = settings.LOG_DIR / "requests.db"
     log_path = settings.LOG_DIR / "requests.jsonl"
-    if not log_path.exists():
+
+    if not db_path.exists() and not log_path.exists():
         click.echo("No log file found. Start the server and make some requests first.")
         return
 
-    report_data = generate_savings_report(log_path, since=since, baseline_model=baseline)
+    since_dt = None
+    if since:
+        try:
+            since_dt = parse_since(since)
+        except ValueError as e:
+            click.echo(f"Error: {e}")
+            raise SystemExit(1)
+
+    # Prefer SQLite (richer data), fall back to JSONL — mirrors the report command
+    if db_path.exists():
+        entries = load_log_entries_sqlite(db_path, since=since_dt)
+    else:
+        entries = load_log_entries(log_path, since=since_dt)
+
+    report_data = generate_savings_report(log_path, since=since, baseline_model=baseline, entries=entries)
 
     if fmt == "json":
         output = json.dumps(report_data, indent=2, default=str)
@@ -795,16 +821,16 @@ def auth_status():
 
     creds = list_credentials()
     if not creds:
-            click.echo("No credentials configured.")
-            click.echo("\nAdd credentials with:")
-            click.echo("  nadirclaw auth openai login      # OpenAI subscription (OAuth)")
-            click.echo("  nadirclaw auth anthropic login    # Anthropic subscription (OAuth)")
-            click.echo("  nadirclaw auth antigravity login # Google Antigravity (OAuth)")
-            click.echo("  nadirclaw auth gemini login   # Google Gemini (OAuth)")
-            click.echo("  nadirclaw auth setup-token        # Claude subscription token")
-            click.echo("  nadirclaw auth add                # Any provider API key")
-            click.echo("  Or set env vars: ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.")
-            return
+        click.echo("No credentials configured.")
+        click.echo("\nAdd credentials with:")
+        click.echo("  nadirclaw auth openai login      # OpenAI subscription (OAuth)")
+        click.echo("  nadirclaw auth anthropic login   # Anthropic subscription (OAuth)")
+        click.echo("  nadirclaw auth antigravity login # Google Antigravity (OAuth)")
+        click.echo("  nadirclaw auth gemini login      # Google Gemini (OAuth)")
+        click.echo("  nadirclaw auth setup-token        # Claude subscription token")
+        click.echo("  nadirclaw auth add                # Any provider API key")
+        click.echo("  Or set env vars: ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.")
+        return
 
     click.echo("Configured Credentials")
     click.echo("-" * 50)
@@ -997,6 +1023,64 @@ def discover(scan_network):
         click.echo()
         click.echo("To use an instance, update your ~/.nadirclaw/.env:")
         click.echo(f"  OLLAMA_API_BASE={instances[0]['url']}")
+
+
+@main.command()
+@click.option("--simple-model", default=None, help="Override simple model for this test")
+@click.option("--complex-model", default=None, help="Override complex model for this test")
+@click.option("--timeout", default=30, type=int, help="Request timeout in seconds (default: 30)")
+def test(simple_model, complex_model, timeout):
+    """Send a probe request to each configured model and report results.
+
+    Verifies that your API keys and model names work before running the server.
+    """
+    import time as _time
+
+    from nadirclaw.settings import settings
+
+    s_model = simple_model or settings.SIMPLE_MODEL
+    c_model = complex_model or settings.COMPLEX_MODEL
+
+    probe = [{"role": "user", "content": "Reply with the single word: ok"}]
+
+    models_to_test = [("simple", s_model)]
+    if c_model != s_model:
+        models_to_test.append(("complex", c_model))
+
+    click.echo("NadirClaw Model Test")
+    click.echo("=" * 50)
+
+    any_failed = False
+    for tier, model in models_to_test:
+        click.echo(f"\n  [{tier}] {model}")
+        click.echo(f"  {'─' * 46}")
+        t0 = _time.time()
+        try:
+            import litellm
+
+            resp = litellm.completion(
+                model=model,
+                messages=probe,
+                max_tokens=10,
+                timeout=timeout,
+            )
+            latency = int((_time.time() - t0) * 1000)
+            content = resp.choices[0].message.content or ""
+            click.echo(f"  Status:   OK")
+            click.echo(f"  Latency:  {latency}ms")
+            click.echo(f"  Reply:    {content.strip()!r}")
+        except Exception as e:
+            latency = int((_time.time() - t0) * 1000)
+            click.echo(f"  Status:   FAILED ({latency}ms)")
+            click.echo(f"  Error:    {e}")
+            any_failed = True
+
+    click.echo("")
+    if any_failed:
+        click.echo("One or more models failed. Check credentials with: nadirclaw auth status")
+        raise SystemExit(1)
+    else:
+        click.echo("All models OK. Start the router with: nadirclaw serve")
 
 
 if __name__ == "__main__":

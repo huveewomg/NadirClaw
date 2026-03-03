@@ -594,7 +594,9 @@ If the estimated token count of a request exceeds a model's context window, Nadi
 nadirclaw setup              # Interactive setup wizard (providers, keys, models)
 nadirclaw serve              # Start the router server
 nadirclaw serve --log-raw    # Start with full request/response logging
-nadirclaw classify           # Classify a prompt (no server needed)
+nadirclaw test               # Probe each configured model and verify it responds
+nadirclaw classify <prompt>  # Classify a prompt (no server needed)
+nadirclaw classify --format json <prompt>  # Machine-readable JSON output
 nadirclaw report             # Show a summary report of request logs
 nadirclaw report --since 24h # Report for the last 24 hours
 nadirclaw savings            # Show how much money NadirClaw saved you
@@ -697,20 +699,24 @@ Token Usage
 
 ### `nadirclaw classify`
 
-Classify a prompt locally without running the server. Useful for testing your setup:
+Classify a prompt locally without running the server. Useful for testing your setup. Quotes are optional — multi-word prompts work directly:
 
 ```bash
-$ nadirclaw classify "What is 2+2?"
+$ nadirclaw classify What is 2+2?
 Tier:       simple
 Confidence: 0.2848
 Score:      0.0000
 Model:      gemini-3-flash-preview
 
-$ nadirclaw classify "Design a distributed system for real-time trading"
+$ nadirclaw classify Design a distributed system for real-time trading
 Tier:       complex
 Confidence: 0.1843
 Score:      1.0000
 Model:      gemini-2.5-pro
+
+# Machine-readable output for scripting
+$ nadirclaw classify --format json Refactor this module to use dependency injection
+{"tier": "complex", "is_complex": true, "confidence": 0.1612, "score": 0.9056, "model": "gemini-2.5-pro", "prompt": "Refactor this module to use dependency injection"}
 ```
 
 ### `nadirclaw status`
@@ -728,6 +734,37 @@ Log dir:       /Users/you/.nadirclaw/logs
 Token:         nadir-***
 
 Server:        RUNNING (ok)
+```
+
+### `nadirclaw test`
+
+Verify your credentials and model names before starting the server. Sends a short probe request to each configured tier and reports latency and the model's reply:
+
+```bash
+$ nadirclaw test
+NadirClaw Model Test
+==================================================
+
+  [simple] gemini-2.5-flash
+  ──────────────────────────────────────────────
+  Status:   OK
+  Latency:  312ms
+  Reply:    'ok'
+
+  [complex] claude-sonnet-4-5-20250929
+  ──────────────────────────────────────────────
+  Status:   OK
+  Latency:  891ms
+  Reply:    'ok'
+
+All models OK. Start the router with: nadirclaw serve
+```
+
+Exits with code 1 if any model fails, so it works in CI. Override models inline:
+
+```bash
+nadirclaw test --simple-model gemini-2.5-flash --complex-model gpt-4.1
+nadirclaw test --timeout 10
 ```
 
 ## How It Works

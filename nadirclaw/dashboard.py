@@ -8,8 +8,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from nadirclaw.report import load_log_entries
+from nadirclaw.report import load_log_entries, load_log_entries_sqlite
 from nadirclaw.savings import calculate_actual_cost, calculate_hypothetical_cost, get_model_cost
+
+
+def _load_entries(log_path: Path, db_path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Load log entries, preferring SQLite when available."""
+    if db_path is not None and db_path.exists():
+        return load_log_entries_sqlite(db_path)
+    if log_path.exists():
+        return load_log_entries(log_path)
+    return []
 
 HEADER = r"""
  _   _           _ _       ____ _                
@@ -52,7 +61,7 @@ def _build_bar(value: float, max_value: float, width: int = 30, char: str = "█
     return char * filled + "░" * (width - filled)
 
 
-def run_dashboard_rich(log_path: Path, refresh: float = 2.0):
+def run_dashboard_rich(log_path: Path, refresh: float = 2.0, db_path: Optional[Path] = None):
     """Run the dashboard using Rich library for a nice terminal UI."""
     from rich.console import Console
     from rich.layout import Layout
@@ -65,7 +74,7 @@ def run_dashboard_rich(log_path: Path, refresh: float = 2.0):
     start_time = time.time()
 
     def make_display() -> Layout:
-        entries = load_log_entries(log_path)
+        entries = _load_entries(log_path, db_path)
         total = len(entries)
         uptime = time.time() - start_time
 
@@ -225,14 +234,14 @@ def run_dashboard_rich(log_path: Path, refresh: float = 2.0):
     console.print("\n[dim]Dashboard closed.[/dim]")
 
 
-def run_dashboard_basic(log_path: Path, refresh: float = 2.0):
+def run_dashboard_basic(log_path: Path, refresh: float = 2.0, db_path: Optional[Path] = None):
     """Fallback dashboard without Rich, using basic terminal output."""
     start_time = time.time()
 
     try:
         while True:
             os.system("clear" if os.name != "nt" else "cls")
-            entries = load_log_entries(log_path)
+            entries = _load_entries(log_path, db_path)
             total = len(entries)
             uptime = time.time() - start_time
 
@@ -279,17 +288,18 @@ def run_dashboard_basic(log_path: Path, refresh: float = 2.0):
         print("\nDashboard closed.")
 
 
-def run_dashboard(log_path: Path, refresh: float = 2.0):
+def run_dashboard(log_path: Path, refresh: float = 2.0, db_path: Optional[Path] = None):
     """Run the dashboard, using Rich if available, otherwise basic fallback."""
-    if not log_path.exists():
-        print("No log file found at", log_path)
+    has_sqlite = db_path is not None and db_path.exists()
+    if not has_sqlite and not log_path.exists():
+        print("No log file found.")
         print("Start NadirClaw (nadirclaw serve) and make some requests first.")
         return
 
     try:
         import rich  # noqa: F401
-        run_dashboard_rich(log_path, refresh)
+        run_dashboard_rich(log_path, refresh, db_path=db_path)
     except ImportError:
         print("(Install 'rich' for a better dashboard: pip install rich)")
         print()
-        run_dashboard_basic(log_path, refresh)
+        run_dashboard_basic(log_path, refresh, db_path=db_path)

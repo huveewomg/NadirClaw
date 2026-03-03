@@ -132,21 +132,21 @@ class ModelRateLimiter:
         models_status = {}
 
         with self._lock:
-            # Report on all models with explicit limits
+            # Snapshot under lock so limits and hits are consistent
             all_models = set(self._limits.keys()) | set(self._hits.keys())
             for model in sorted(all_models):
-                limit = self.get_limit(model)
+                limit = self._limits.get(model, self._default_rpm)
                 q = self._hits.get(model, collections.deque())
-                # Count only recent hits
                 recent = sum(1 for t in q if t > now - window)
                 models_status[model] = {
                     "rpm_limit": limit if limit > 0 else "unlimited",
                     "current_rpm": recent,
                     "remaining": max(0, limit - recent) if limit > 0 else "unlimited",
                 }
+            default_rpm = self._default_rpm
 
         return {
-            "default_rpm": self._default_rpm if self._default_rpm > 0 else "unlimited",
+            "default_rpm": default_rpm if default_rpm > 0 else "unlimited",
             "models": models_status,
         }
 
