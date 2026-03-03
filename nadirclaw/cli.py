@@ -882,15 +882,14 @@ def onboard():
 
     existing["models"]["providers"]["nadirclaw"] = nadirclaw_provider
 
-    # Set default agent model
+    # Register nadirclaw/auto as a known model (don't override primary)
     if "agents" not in existing:
         existing["agents"] = {}
     if "defaults" not in existing["agents"]:
         existing["agents"]["defaults"] = {}
-    if "model" not in existing["agents"]["defaults"]:
-        existing["agents"]["defaults"]["model"] = {}
-
-    existing["agents"]["defaults"]["model"]["primary"] = "nadirclaw/auto"
+    if "models" not in existing["agents"]["defaults"]:
+        existing["agents"]["defaults"]["models"] = {}
+    existing["agents"]["defaults"]["models"]["nadirclaw/auto"] = {"alias": "nadir"}
 
     # Write config
     openclaw_dir.mkdir(parents=True, exist_ok=True)
@@ -898,11 +897,37 @@ def onboard():
         json.dump(existing, f, indent=2)
 
     click.echo(f"\nWrote OpenClaw config to {config_path}")
-    click.echo("\nNadirClaw provider added with model 'nadirclaw/auto'")
-    click.echo("Default agent model set to 'nadirclaw/auto'")
+
+    # Add nadirclaw provider to each agent's models.json
+    agents_dir = openclaw_dir / "agents"
+    agent_count = 0
+    if agents_dir.exists():
+        for agent_dir in sorted(agents_dir.iterdir()):
+            models_path = agent_dir / "agent" / "models.json"
+            if not models_path.exists():
+                continue
+            try:
+                with open(models_path) as f:
+                    agent_models = json.load(f)
+                providers = agent_models.get("providers", {})
+                if "nadirclaw" in providers:
+                    click.echo(f"  {agent_dir.name}: nadirclaw provider already exists, skipping")
+                    continue
+                providers["nadirclaw"] = nadirclaw_provider
+                agent_models["providers"] = providers
+                with open(models_path, "w") as f:
+                    json.dump(agent_models, f, indent=2)
+                agent_count += 1
+                click.echo(f"  {agent_dir.name}: added nadirclaw provider")
+            except Exception as e:
+                click.echo(f"  {agent_dir.name}: error — {e}")
+
+    click.echo(f"\nNadirClaw provider added to {agent_count} agent(s)")
+    click.echo("Model 'nadirclaw/auto' registered (alias: nadir)")
     click.echo("\nNext steps:")
     click.echo("  1. Start NadirClaw:  nadirclaw serve")
-    click.echo("  2. Verify:           openclaw doctor")
+    click.echo("  2. Restart gateway:  openclaw gateway restart")
+    click.echo("  3. Set agent model:  /model nadirclaw/auto (in agent session)")
 
 
 @main.group()
