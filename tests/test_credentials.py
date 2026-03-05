@@ -12,6 +12,7 @@ from nadirclaw.credentials import (
     _credentials_path,
     _mask_token,
     _read_credentials,
+    _read_openclaw_auth_profiles,
     _write_credentials,
     detect_provider,
     get_credential,
@@ -176,3 +177,141 @@ class TestListCredentials:
         anthropic = next(c for c in result if c["provider"] == "anthropic")
         assert anthropic["source"] == "manual"
         assert "***" in anthropic["masked_token"] or "..." in anthropic["masked_token"]
+
+
+# ---------------------------------------------------------------------------
+# OpenClaw auth-profiles.json reader
+# ---------------------------------------------------------------------------
+
+class TestReadOpenClawAuthProfiles:
+    """Tests for _read_openclaw_auth_profiles — reads credentials from OpenClaw's
+    auth-profiles.json file, supporting api_key, token, and oauth types."""
+
+    def _write_profiles(self, tmp_path, profiles):
+        path = tmp_path / "auth-profiles.json"
+        path.write_text(json.dumps({"version": 1, "profiles": profiles}))
+        return str(path)
+
+    def test_api_key_type(self, tmp_path):
+        path = self._write_profiles(tmp_path, {
+            "zai:default": {
+                "type": "api_key",
+                "provider": "zai",
+                "key": "zai-key-123",
+            }
+        })
+        assert _read_openclaw_auth_profiles(path, "zai") == "zai-key-123"
+
+    def test_token_type(self, tmp_path):
+        path = self._write_profiles(tmp_path, {
+            "anthropic:default": {
+                "type": "token",
+                "provider": "anthropic",
+                "token": "sk-ant-test-456",
+            }
+        })
+        assert _read_openclaw_auth_profiles(path, "anthropic") == "sk-ant-test-456"
+
+    def test_oauth_type(self, tmp_path):
+        path = self._write_profiles(tmp_path, {
+            "openai-codex:default": {
+                "type": "oauth",
+                "provider": "openai-codex",
+                "access": "eyJhbGciOi...",
+                "refresh": "rt_abc...",
+                "expires": 9999999999999,
+            }
+        })
+        assert _read_openclaw_auth_profiles(path, "openai-codex") == "eyJhbGciOi..."
+
+    def test_provider_not_found(self, tmp_path):
+        path = self._write_profiles(tmp_path, {
+            "zai:default": {
+                "type": "api_key",
+                "provider": "zai",
+                "key": "zai-key",
+            }
+        })
+        assert _read_openclaw_auth_profiles(path, "anthropic") is None
+
+    def test_missing_file(self, tmp_path):
+        assert _read_openclaw_auth_profiles(str(tmp_path / "nonexistent.json"), "anthropic") is None
+
+    def test_malformed_json(self, tmp_path):
+        path = tmp_path / "auth-profiles.json"
+        path.write_text("not valid json{{{")
+        assert _read_openclaw_auth_profiles(str(path), "anthropic") is None
+
+    def test_multiple_providers(self, tmp_path):
+        path = self._write_profiles(tmp_path, {
+            "anthropic:default": {
+                "type": "token",
+                "provider": "anthropic",
+                "token": "sk-ant-111",
+            },
+            "openai-codex:default": {
+                "type": "oauth",
+                "provider": "openai-codex",
+                "access": "codex-access-222",
+                "refresh": "rt_xxx",
+                "expires": 9999999999999,
+            },
+        })
+        assert _read_openclaw_auth_profiles(path, "anthropic") == "sk-ant-111"
+        assert _read_openclaw_auth_profiles(path, "openai-codex") == "codex-access-222"
+        assert _read_openclaw_auth_profiles(path, "google") is None
+
+
+# ---------------------------------------------------------------------------
+# get_credential with user session (auth_profiles_path)
+# ---------------------------------------------------------------------------
+
+class TestGetCredentialWithUser:
+    """Tests for get_credential when a UserSession with auth_profiles_path is provided."""
+
+    def _make_user(self, tmp_path, profiles, **kwargs):
+        from nadirclaw.auth import UserSession
+        path = tmp_path / "auth-profiles.json"
+        path.write_text(json.dumps({"version": 1, "profiles": profiles}))
+        user_data = {"auth_profiles_path": str(path), **kwargs}
+        return UserSession(user_data)
+
+    def test_auth_profiles_resolves_credential(self, tmp_path):
+        user = self._make_user(tmp_path, {
+            "anthropic:default": {
+                "type": "token",
+                "provider": "anthropic",
+                "token": "sk-ant-from-openclaw",
+            }
+        })
+        assert get_credential("anthropic", user=user) == "sk-ant-from-openclaw"
+
+    def test_api_keys_take_precedence_over_auth_profiles(self, tmp_path):
+        user = self._make_user(
+            tmp_path,
+            {"anthropic:default": {"type": "token", "provider": "anthropic", "token": "from-file"}},
+            api_keys={"anthropic": "from-api-keys"},
+        )
+        assert get_credential("anthropic", user=user) == "from-api-keys"
+
+    def test_auth_profiles_take_precedence_over_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "from-env")
+        user = self._make_user(tmp_path, {
+            "anthropic:default": {
+                "type": "token",
+                "provider": "anthropic",
+                "token": "from-openclaw",
+            }
+        })
+        assert get_credential("anthropic", user=user) == "from-openclaw"
+
+    def test_falls_through_to_env_when_provider_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "from-env")
+        user = self._make_user(tmp_path, {
+            "zai:default": {"type": "api_key", "provider": "zai", "key": "zai-key"},
+        })
+        assert get_credential("anthropic", user=user) == "from-env"
+
+    def test_no_user_falls_through_normally(self):
+        """get_credential(provider) without user still works as before."""
+        assert get_credential("nonexistent") is None

@@ -65,7 +65,7 @@ class TestFallbackChainBehavior:
         # Mock _dispatch_model to fail primary, succeed on backup
         call_count = {"count": 0}
 
-        async def mock_dispatch(model, req, provider):
+        async def mock_dispatch(model, req, provider, user=None):
             call_count["count"] += 1
             if model == "model-primary":
                 raise RateLimitExhausted(model)
@@ -110,7 +110,7 @@ class TestFallbackChainBehavior:
 
         attempts = []
 
-        async def mock_dispatch(model, req, provider):
+        async def mock_dispatch(model, req, provider, user=None):
             attempts.append(model)
             if model in ["m1", "m2", "m3"]:
                 raise RateLimitExhausted(model)
@@ -152,7 +152,7 @@ class TestFallbackChainBehavior:
         request = MockRequest()
         analysis_info = {"tier": "complex", "strategy": "smart-routing"}
 
-        async def mock_dispatch(model, req, provider):
+        async def mock_dispatch(model, req, provider, user=None):
             raise RateLimitExhausted(model)
 
         with patch("nadirclaw.server._dispatch_model", side_effect=mock_dispatch):
@@ -186,7 +186,7 @@ class TestFallbackChainBehavior:
         request = MockRequest()
         analysis_info = {"tier": "complex", "strategy": "smart-routing"}
 
-        async def mock_dispatch(model, req, provider):
+        async def mock_dispatch(model, req, provider, user=None):
             raise RateLimitExhausted(model)
 
         with patch("nadirclaw.server._dispatch_model", side_effect=mock_dispatch):

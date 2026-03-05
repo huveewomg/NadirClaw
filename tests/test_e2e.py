@@ -53,7 +53,7 @@ def authed_client(monkeypatch, auth_token):
 
 def _mock_fallback(content="OK", prompt_tokens=10, completion_tokens=5, model=None):
     """Build a side_effect callable for patching _call_with_fallback."""
-    async def _side_effect(selected_model, request, provider, analysis_info):
+    async def _side_effect(selected_model, request, provider, analysis_info, user=None):
         actual_model = model or selected_model
         return (
             {

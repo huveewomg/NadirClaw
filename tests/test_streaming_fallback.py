@@ -53,7 +53,7 @@ class TestStreamWithFallback:
     @patch("nadirclaw.server._dispatch_model_stream")
     async def test_successful_stream(self, mock_dispatch):
         """Primary model streams successfully — no fallback needed."""
-        async def _fake_stream(model, request, provider):
+        async def _fake_stream(model, request, provider, user=None):
             yield {"role": "assistant", "content": "Hello "}, None, None
             yield {"content": "world"}, None, None
             yield {}, {"prompt_tokens": 10, "completion_tokens": 5}, "stop"
@@ -84,7 +84,7 @@ class TestStreamWithFallback:
 
         call_count = 0
 
-        async def _fake_dispatch(model, request, provider):
+        async def _fake_dispatch(model, request, provider, user=None):
             nonlocal call_count
             call_count += 1
             if model == "model-a":
@@ -121,7 +121,7 @@ class TestStreamWithFallback:
         """If model fails mid-stream, adds error notice and stops (can't restart)."""
         mock_settings.FALLBACK_CHAIN = ["model-b"]
 
-        async def _failing_stream(model, request, provider):
+        async def _failing_stream(model, request, provider, user=None):
             yield {"role": "assistant", "content": "Starting..."}, None, None
             raise Exception("Connection lost")
 
@@ -153,7 +153,7 @@ class TestStreamWithFallback:
         """If all models fail pre-content, yields an error message."""
         mock_settings.FALLBACK_CHAIN = ["model-b"]
 
-        async def _always_fail(model, request, provider):
+        async def _always_fail(model, request, provider, user=None):
             raise RateLimitExhausted(model=model, retry_after=60)
 
         mock_dispatch.side_effect = _always_fail
@@ -186,7 +186,7 @@ class TestStreamWithFallback:
         """If no fallback chain and primary fails, yields error."""
         mock_settings.FALLBACK_CHAIN = []
 
-        async def _fail(model, request, provider):
+        async def _fail(model, request, provider, user=None):
             raise RateLimitExhausted(model=model, retry_after=60)
 
         mock_dispatch.side_effect = _fail
@@ -204,7 +204,7 @@ class TestStreamWithFallback:
     @patch("nadirclaw.server._dispatch_model_stream")
     async def test_usage_tracked(self, mock_dispatch):
         """Usage from the stream is captured in analysis_info."""
-        async def _stream(model, request, provider):
+        async def _stream(model, request, provider, user=None):
             yield {"role": "assistant", "content": "Hi"}, None, None
             yield {}, {"prompt_tokens": 15, "completion_tokens": 8}, "stop"
 
