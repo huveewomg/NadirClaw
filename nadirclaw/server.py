@@ -314,7 +314,9 @@ async def _smart_route_analysis(
         result = await analyzer.analyze(text=prompt, system_message=system_message)
 
         is_complex = result.get("tier_name") == "complex"
-        selected = settings.COMPLEX_MODEL if is_complex else settings.SIMPLE_MODEL
+        _complex = user.complex_model or settings.COMPLEX_MODEL
+        _simple = user.simple_model or settings.SIMPLE_MODEL
+        selected = _complex if is_complex else _simple
 
         analysis = {
             "strategy": "smart-routing",
@@ -325,8 +327,8 @@ async def _smart_route_analysis(
             "confidence": result.get("confidence"),
             "reasoning": result.get("reasoning"),
             "classifier_latency_ms": result.get("analyzer_latency_ms"),
-            "simple_model": settings.SIMPLE_MODEL,
-            "complex_model": settings.COMPLEX_MODEL,
+            "simple_model": _simple,
+            "complex_model": _complex,
             "ranked_models": [
                 {"model": m.get("model_name"), "score": m.get("suitability_score")}
                 for m in result.get("ranked_models", [])[:5]
@@ -438,6 +440,7 @@ async def _call_gemini(
     request: "ChatCompletionRequest",
     provider: str,
     _retry_count: int = 0,
+    user=None,
 ) -> Dict[str, Any]:
     """Call a Gemini model using the native Google GenAI SDK.
 
@@ -453,7 +456,7 @@ async def _call_gemini(
 
     MAX_RETRIES = 1  # Keep low — fallback handles the rest
 
-    api_key = get_credential(provider)
+    api_key = get_credential(provider, user=user)
     if not api_key:
         raise HTTPException(
             status_code=500,
@@ -542,7 +545,7 @@ async def _call_gemini(
                     native_model, retry_delay, _retry_count + 1, MAX_RETRIES,
                 )
                 await asyncio.sleep(retry_delay)
-                return await _call_gemini(model, request, provider, _retry_count + 1)
+                return await _call_gemini(model, request, provider, _retry_count + 1, user=user)
             else:
                 # Exhausted retries — raise so the caller can try a fallback model
                 logger.error(
@@ -613,6 +616,7 @@ async def _call_litellm(
     model: str,
     request: "ChatCompletionRequest",
     provider: str | None,
+    user=None,
 ) -> Dict[str, Any]:
     """Call a model via LiteLLM (Anthropic, OpenAI, Ollama, etc.)."""
     import litellm
@@ -667,7 +671,7 @@ async def _call_litellm(
         call_kwargs["tool_choice"] = extra["tool_choice"]
 
     if cred_provider and cred_provider != "ollama":
-        api_key = get_credential(cred_provider)
+        api_key = get_credential(cred_provider, user=user)
         if api_key:
             # Anthropic OAuth/setup-tokens (sk-ant-oat*) require Bearer auth
             # and the oauth-2025-04-20 beta header. Bypass LiteLLM and call
@@ -784,6 +788,7 @@ async def _dispatch_model(
     model: str,
     request: "ChatCompletionRequest",
     provider: str | None,
+    user=None,
 ) -> Dict[str, Any]:
     """Call the right backend (Gemini native or LiteLLM) for a model.
 
@@ -803,8 +808,8 @@ async def _dispatch_model(
 
     with trace_span("dispatch_model", {"gen_ai.request.model": model, "gen_ai.system": provider or ""}):
         if provider == "google":
-            return await _call_gemini(model, request, provider)
-        return await _call_litellm(model, request, provider)
+            return await _call_gemini(model, request, provider, user=user)
+        return await _call_litellm(model, request, provider, user=user)
 
 
 async def _call_with_fallback(
@@ -812,6 +817,7 @@ async def _call_with_fallback(
     request: "ChatCompletionRequest",
     provider: str | None,
     analysis_info: Dict[str, Any],
+    user=None,
 ) -> tuple:
     """Try the selected model; on failure, cascade through the fallback chain.
 
@@ -824,7 +830,7 @@ async def _call_with_fallback(
     from nadirclaw.credentials import detect_provider
 
     try:
-        response_data = await _dispatch_model(selected_model, request, provider)
+        response_data = await _dispatch_model(selected_model, request, provider, user=user)
         return response_data, selected_model, analysis_info
     except (RateLimitExhausted, Exception) as primary_error:
         if isinstance(primary_error, HTTPException):
@@ -854,7 +860,7 @@ async def _call_with_fallback(
 
             try:
                 response_data = await _dispatch_model(
-                    fallback_model, request, fallback_provider,
+                    fallback_model, request, fallback_provider, user=user,
                 )
                 analysis_info = {
                     **analysis_info,
@@ -940,11 +946,21 @@ async def chat_completions(
             resolve_profile,
         )
 
+        # "auto:<model>" encodes a per-request complex model override
+        _encoded_complex: Optional[str] = None
+        if request.model and request.model.startswith("auto:"):
+            _encoded_complex = request.model.split(":", 1)[1]
+            request = request.model_copy(update={"model": "auto"})
+            current_user.complex_model = _encoded_complex
+
         # --- Check routing profiles (auto/eco/premium/free/reasoning) ---
         profile = resolve_profile(request.model)
 
+        _user_simple = current_user.simple_model or settings.SIMPLE_MODEL
+        _user_complex = current_user.complex_model or settings.COMPLEX_MODEL
+
         if profile == "eco":
-            selected_model = settings.SIMPLE_MODEL
+            selected_model = _user_simple
             analysis_info = {
                 "strategy": "profile:eco",
                 "selected_model": selected_model,
@@ -953,7 +969,7 @@ async def chat_completions(
                 "complexity_score": 0,
             }
         elif profile == "premium":
-            selected_model = settings.COMPLEX_MODEL
+            selected_model = _user_complex
             analysis_info = {
                 "strategy": "profile:premium",
                 "selected_model": selected_model,
@@ -1028,8 +1044,8 @@ async def chat_completions(
                     base_tier=analysis_info.get("tier", "simple"),
                     request_meta=req_meta,
                     messages=request.messages,
-                    simple_model=settings.SIMPLE_MODEL,
-                    complex_model=settings.COMPLEX_MODEL,
+                    simple_model=_user_simple,
+                    complex_model=_user_complex,
                     reasoning_model=settings.REASONING_MODEL,
                     free_model=settings.FREE_MODEL,
                 )
@@ -1073,6 +1089,7 @@ async def chat_completions(
             async def _true_stream_wrapper():
                 async for sse_event in _stream_with_fallback(
                     selected_model, request, provider, _stream_analysis, request_id,
+                    user=current_user,
                 ):
                     yield sse_event
 
@@ -1120,7 +1137,7 @@ async def chat_completions(
         if not cache_hit:
             with trace_span("chat_completion", {"nadirclaw.tier": analysis_info.get("tier")}) as span:
                 response_data, selected_model, analysis_info = await _call_with_fallback(
-                    selected_model, request, provider, analysis_info,
+                    selected_model, request, provider, analysis_info, user=current_user,
                 )
 
                 elapsed_ms = int((time.time() - start_time) * 1000)
@@ -1320,6 +1337,7 @@ async def _stream_litellm(
     model: str,
     request: "ChatCompletionRequest",
     provider: str | None,
+    user=None,
 ):
     """True streaming via LiteLLM. Yields (delta_dict, usage_dict|None, finish_reason|None) tuples.
 
@@ -1368,7 +1386,7 @@ async def _stream_litellm(
         call_kwargs["tool_choice"] = extra["tool_choice"]
 
     if cred_provider and cred_provider != "ollama":
-        api_key = get_credential(cred_provider)
+        api_key = get_credential(cred_provider, user=user)
         if api_key:
             call_kwargs["api_key"] = api_key
 
@@ -1413,6 +1431,7 @@ async def _stream_gemini(
     model: str,
     request: "ChatCompletionRequest",
     provider: str | None,
+    user=None,
 ):
     """True streaming via Gemini. Yields (delta_dict, usage_dict|None, finish_reason|None) tuples."""
     import re
@@ -1422,7 +1441,7 @@ async def _stream_gemini(
 
     from nadirclaw.credentials import get_credential
 
-    api_key = get_credential(provider)
+    api_key = get_credential(provider, user=user)
     if not api_key:
         raise HTTPException(
             status_code=500,
@@ -1539,6 +1558,7 @@ async def _dispatch_model_stream(
     model: str,
     request: "ChatCompletionRequest",
     provider: str | None,
+    user=None,
 ):
     """Route to the correct streaming backend. Yields (delta, usage, finish_reason) tuples."""
     from nadirclaw.rate_limit import get_model_rate_limiter
@@ -1555,10 +1575,10 @@ async def _dispatch_model_stream(
     if provider == "google":
         async_gen = None
         # _stream_gemini is a sync generator; wrap it
-        for item in _stream_gemini(model, request, provider):
+        for item in _stream_gemini(model, request, provider, user=user):
             yield item
     else:
-        async for item in _stream_litellm(model, request, provider):
+        async for item in _stream_litellm(model, request, provider, user=user):
             yield item
 
 
@@ -1568,6 +1588,7 @@ async def _stream_with_fallback(
     provider: str | None,
     analysis_info: Dict[str, Any],
     request_id: str,
+    user=None,
 ):
     """True streaming with automatic fallback on pre-content errors.
 
@@ -1596,7 +1617,7 @@ async def _stream_with_fallback(
 
         try:
             first_chunk = True
-            async for delta_dict, usage, finish_reason in _dispatch_model_stream(model, request, provider):
+            async for delta_dict, usage, finish_reason in _dispatch_model_stream(model, request, provider, user=user):
                 if usage:
                     accumulated_usage = usage
                 if finish_reason:

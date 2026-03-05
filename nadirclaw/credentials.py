@@ -231,25 +231,73 @@ def _maybe_refresh_oauth(provider: str, entry: dict) -> Optional[str]:
 
 
 
-def get_credential(provider: str) -> Optional[str]:
+def _read_openclaw_auth_profiles(path: str, provider: str) -> Optional[str]:
+    """Read a credential from an OpenClaw instance's auth-profiles.json.
+
+    Handles three credential types stored by OpenClaw:
+      - api_key: returns the "key" field
+      - token:   returns the "token" field
+      - oauth:   returns the "access" token (OpenClaw handles refresh)
+
+    Args:
+        path: Absolute path to the auth-profiles.json file.
+        provider: Provider name to look up (e.g. "anthropic", "openai-codex").
+
+    Returns:
+        The credential string, or None if not found.
+    """
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("Could not read OpenClaw auth-profiles at %s: %s", path, e)
+        return None
+
+    profiles = data.get("profiles", {})
+
+    # Match by provider — keys are "provider:profile_name" (e.g. "anthropic:default")
+    for profile_key, profile in profiles.items():
+        if profile.get("provider") != provider:
+            continue
+
+        profile_type = profile.get("type", "")
+        if profile_type == "api_key":
+            return profile.get("key")
+        elif profile_type == "token":
+            return profile.get("token")
+        elif profile_type == "oauth":
+            return profile.get("access")
+
+    return None
+
+
+def get_credential(provider: str, user=None) -> Optional[str]:
     """Resolve a credential for a provider.
 
     Resolution order:
-      1. OpenClaw stored token (~/.openclaw/openclaw.json)
-      2. NadirClaw stored token (~/.nadirclaw/credentials.json)
-         — with automatic OAuth refresh if expired
-      3. Environment variable
-      4. None
+      1a. Per-user api_keys from virtual key config (users.json)
+      1b. OpenClaw auth-profiles.json (per-instance credentials on disk)
+      2.  NadirClaw stored token (~/.nadirclaw/credentials.json)
+          — with automatic OAuth refresh if expired
+      3.  Environment variable
+      4.  None
 
     Args:
         provider: Provider name (e.g. "anthropic", "openai").
+        user: Optional UserSession — checked first for per-user credentials.
 
     Returns:
         The token string, or None if no credential found.
     """
+    # 1a. Per-user api_keys
+    if user is not None and provider in user.api_keys:
+        return user.api_keys[provider]
 
-
-
+    # 1b. OpenClaw auth-profiles.json
+    if user is not None and user.auth_profiles_path:
+        token = _read_openclaw_auth_profiles(user.auth_profiles_path, provider)
+        if token:
+            return token
 
     # 2. NadirClaw stored credentials (with OAuth auto-refresh)
     creds = _read_credentials()
