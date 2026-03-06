@@ -28,6 +28,12 @@ class UserSession:
         self.allowed_models = user_data.get("allowed_models", [])
         self.api_key_config = user_data.get("api_key_config", {})
         self.raw_data = user_data
+        # Per-user model overrides (fall back to global settings if absent)
+        self.complex_model: Optional[str] = user_data.get("complex_model") or None
+        self.simple_model: Optional[str] = user_data.get("simple_model") or None
+        self.api_keys: Dict[str, str] = user_data.get("api_keys", {})
+        self.auth_profiles_path: Optional[str] = user_data.get("auth_profiles_path") or None
+        self.config_path: Optional[str] = user_data.get("config_path") or None
 
 
 def _load_local_users() -> Dict[str, Dict[str, Any]]:

@@ -9,6 +9,7 @@ OpenClaw integration is optional — NadirClaw works standalone.
 import json
 import logging
 import os
+import re
 import platform
 import tempfile
 import time
@@ -231,25 +232,143 @@ def _maybe_refresh_oauth(provider: str, entry: dict) -> Optional[str]:
 
 
 
-def get_credential(provider: str) -> Optional[str]:
+def _parse_json5(path: str) -> Optional[dict]:
+    """Read and parse a JSON5 file (strips JS-style comments and trailing commas)."""
+    try:
+        with open(path) as f:
+            raw = f.read()
+    except OSError as e:
+        logger.warning("Could not read %s: %s", path, e)
+        return None
+
+    # Strip JS-style comments
+    raw = re.sub(r'//[^\n]*', '', raw)
+    raw = re.sub(r'/\*.*?\*/', '', raw, flags=re.DOTALL)
+    # Strip trailing commas before } or ]
+    raw = re.sub(r',\s*([}\]])', r'\1', raw)
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.warning("Could not parse %s: %s", path, e)
+        return None
+
+
+# Models that are local/free — skip these when looking for a complex model
+_LOCAL_PREFIXES = ("ollama/", "nadirclaw/", "ollama_chat/")
+
+
+def read_openclaw_complex_model(config_path: str, auth_profiles_path: Optional[str] = None) -> Optional[str]:
+    """Read the user's preferred complex model from OpenClaw config + credentials.
+
+    Reads agents.defaults.model.fallbacks from config.json5, skips local models
+    (ollama/*, nadirclaw/*), and returns the first model whose provider has
+    credentials in auth-profiles.json.
+
+    Args:
+        config_path: Absolute path to config.json5.
+        auth_profiles_path: Absolute path to auth-profiles.json (optional).
+
+    Returns:
+        The complex model string (e.g. "openai-codex/gpt-5.3-codex"), or None.
+    """
+    data = _parse_json5(config_path)
+    if not data:
+        return None
+
+    model_config = data.get("agents", {}).get("defaults", {}).get("model", {})
+
+    # Collect candidate models: primary first, then fallbacks
+    candidates = []
+    primary = model_config.get("primary", "")
+    if primary:
+        candidates.append(primary)
+    candidates.extend(model_config.get("fallbacks", []))
+
+    # Filter out local/nadirclaw models
+    candidates = [m for m in candidates if not m.startswith(_LOCAL_PREFIXES)]
+
+    if not candidates:
+        return None
+
+    # If we have auth-profiles, prefer models whose provider has credentials
+    if auth_profiles_path:
+        for model in candidates:
+            provider = detect_provider(model)
+            if provider and _read_openclaw_auth_profiles(auth_profiles_path, provider):
+                return model
+
+    # No credential check possible — return first non-local candidate
+    return candidates[0] if candidates else None
+
+
+def _read_openclaw_auth_profiles(path: str, provider: str) -> Optional[str]:
+    """Read a credential from an OpenClaw instance's auth-profiles.json.
+
+    Handles three credential types stored by OpenClaw:
+      - api_key: returns the "key" field
+      - token:   returns the "token" field
+      - oauth:   returns the "access" token (OpenClaw handles refresh)
+
+    Args:
+        path: Absolute path to the auth-profiles.json file.
+        provider: Provider name to look up (e.g. "anthropic", "openai-codex").
+
+    Returns:
+        The credential string, or None if not found.
+    """
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("Could not read OpenClaw auth-profiles at %s: %s", path, e)
+        return None
+
+    profiles = data.get("profiles", {})
+
+    # Match by provider — keys are "provider:profile_name" (e.g. "anthropic:default")
+    for profile_key, profile in profiles.items():
+        if profile.get("provider") != provider:
+            continue
+
+        profile_type = profile.get("type", "")
+        if profile_type == "api_key":
+            return profile.get("key")
+        elif profile_type == "token":
+            return profile.get("token")
+        elif profile_type == "oauth":
+            return profile.get("access")
+
+    return None
+
+
+def get_credential(provider: str, user=None) -> Optional[str]:
     """Resolve a credential for a provider.
 
     Resolution order:
-      1. OpenClaw stored token (~/.openclaw/openclaw.json)
-      2. NadirClaw stored token (~/.nadirclaw/credentials.json)
-         — with automatic OAuth refresh if expired
-      3. Environment variable
-      4. None
+      1a. Per-user api_keys from virtual key config (users.json)
+      1b. OpenClaw auth-profiles.json (per-instance credentials on disk)
+      2.  NadirClaw stored token (~/.nadirclaw/credentials.json)
+          — with automatic OAuth refresh if expired
+      3.  Environment variable
+      4.  None
 
     Args:
         provider: Provider name (e.g. "anthropic", "openai").
+        user: Optional UserSession — checked first for per-user credentials.
 
     Returns:
         The token string, or None if no credential found.
     """
+    # 1a. Per-user api_keys
+    if user is not None and provider in user.api_keys:
+        return user.api_keys[provider]
 
-
-
+    # 1b. OpenClaw auth-profiles.json
+    if user is not None and user.auth_profiles_path:
+        token = _read_openclaw_auth_profiles(user.auth_profiles_path, provider)
+        if token:
+            return token
 
     # 2. NadirClaw stored credentials (with OAuth auto-refresh)
     creds = _read_credentials()

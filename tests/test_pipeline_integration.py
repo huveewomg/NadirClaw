@@ -27,7 +27,7 @@ def _make_fallback_mock(content="Hello!", prompt_tokens=10, completion_tokens=5,
                         finish_reason="stop", tool_calls=None, tier="simple",
                         strategy="smart-routing", confidence=0.9, model=None):
     """Create an AsyncMock for _call_with_fallback that returns the correct tuple."""
-    async def side_effect(selected_model, request, provider, analysis_info):
+    async def side_effect(selected_model, request, provider, analysis_info, user=None):
         response_data = {
             "content": content,
             "finish_reason": finish_reason,
