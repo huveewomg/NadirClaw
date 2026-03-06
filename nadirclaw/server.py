@@ -953,6 +953,15 @@ async def chat_completions(
             request = request.model_copy(update={"model": "auto"})
             current_user.complex_model = _encoded_complex
 
+        # If no complex_model set yet, read from user's OpenClaw config + credentials
+        if not current_user.complex_model and current_user.config_path:
+            from nadirclaw.credentials import read_openclaw_complex_model
+            _config_model = read_openclaw_complex_model(
+                current_user.config_path, current_user.auth_profiles_path,
+            )
+            if _config_model:
+                current_user.complex_model = _config_model
+
         # --- Check routing profiles (auto/eco/premium/free/reasoning) ---
         profile = resolve_profile(request.model)
 

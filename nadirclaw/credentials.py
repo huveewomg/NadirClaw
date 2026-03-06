@@ -9,6 +9,7 @@ OpenClaw integration is optional — NadirClaw works standalone.
 import json
 import logging
 import os
+import re
 import platform
 import tempfile
 import time
@@ -229,6 +230,76 @@ def _maybe_refresh_oauth(provider: str, entry: dict) -> Optional[str]:
 
 
 
+
+
+def _parse_json5(path: str) -> Optional[dict]:
+    """Read and parse a JSON5 file (strips JS-style comments and trailing commas)."""
+    try:
+        with open(path) as f:
+            raw = f.read()
+    except OSError as e:
+        logger.warning("Could not read %s: %s", path, e)
+        return None
+
+    # Strip JS-style comments
+    raw = re.sub(r'//[^\n]*', '', raw)
+    raw = re.sub(r'/\*.*?\*/', '', raw, flags=re.DOTALL)
+    # Strip trailing commas before } or ]
+    raw = re.sub(r',\s*([}\]])', r'\1', raw)
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.warning("Could not parse %s: %s", path, e)
+        return None
+
+
+# Models that are local/free — skip these when looking for a complex model
+_LOCAL_PREFIXES = ("ollama/", "nadirclaw/", "ollama_chat/")
+
+
+def read_openclaw_complex_model(config_path: str, auth_profiles_path: Optional[str] = None) -> Optional[str]:
+    """Read the user's preferred complex model from OpenClaw config + credentials.
+
+    Reads agents.defaults.model.fallbacks from config.json5, skips local models
+    (ollama/*, nadirclaw/*), and returns the first model whose provider has
+    credentials in auth-profiles.json.
+
+    Args:
+        config_path: Absolute path to config.json5.
+        auth_profiles_path: Absolute path to auth-profiles.json (optional).
+
+    Returns:
+        The complex model string (e.g. "openai-codex/gpt-5.3-codex"), or None.
+    """
+    data = _parse_json5(config_path)
+    if not data:
+        return None
+
+    model_config = data.get("agents", {}).get("defaults", {}).get("model", {})
+
+    # Collect candidate models: primary first, then fallbacks
+    candidates = []
+    primary = model_config.get("primary", "")
+    if primary:
+        candidates.append(primary)
+    candidates.extend(model_config.get("fallbacks", []))
+
+    # Filter out local/nadirclaw models
+    candidates = [m for m in candidates if not m.startswith(_LOCAL_PREFIXES)]
+
+    if not candidates:
+        return None
+
+    # If we have auth-profiles, prefer models whose provider has credentials
+    if auth_profiles_path:
+        for model in candidates:
+            provider = detect_provider(model)
+            if provider and _read_openclaw_auth_profiles(auth_profiles_path, provider):
+                return model
+
+    # No credential check possible — return first non-local candidate
+    return candidates[0] if candidates else None
 
 
 def _read_openclaw_auth_profiles(path: str, provider: str) -> Optional[str]:
